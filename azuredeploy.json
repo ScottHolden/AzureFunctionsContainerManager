@@ -1,0 +1,158 @@
+{
+    "$schema": "http://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "name": {
+            "type": "string"
+        },
+        "packageUri": {
+            "type": "string",
+            "defaultValue": ""
+        }
+    },
+    "variables": {
+        "entropy": "[uniqueString(resourceGroup().id, parameters('name'))]",
+        "vaultName": "[concat('vlt', parameters('name'), variables('entropy'))]",
+        "vaultId": "[resourceId('Microsoft.KeyVault/vaults', variables('vaultName'))]",
+        "functionName": "[concat('fnc', parameters('name'), variables('entropy'))]",
+        "functionStorageName": "[take(toLower(concat('sa', parameters('name'), variables('entropy'))), 24)]",
+        "functionStorageId":"[resourceId('Microsoft.Storage/storageAccounts', variables('functionStorageName'))]",
+        "functionStorageConnectionPrefix":"[concat('DefaultEndpointsProtocol=https;AccountName=', variables('functionStorageName'), ';AccountKey=')]",
+        "functionIdentityId": "[concat(resourceId('Microsoft.Web/sites', variables('functionName')),'/providers/Microsoft.ManagedIdentity/Identities/default')]",
+
+        "guidMapA": "[uniqueString(variables('entropy'))]",
+        "guidMapB": "[uniqueString(variables('guidMapA'))]",
+        "guidMapC": "[uniqueString(variables('guidMapB'))]",
+        "guidMap": "[toLower(concat(variables('entropy'), variables('guidMapA'), variables('guidMapB'), variables('guidMapC'), '0123456789abcdefghijklmnopqrstuv'))]",
+        "guidPart": "[concat(mod(indexOf(variables('guidMap'), '5'), 10), mod(indexOf(variables('guidMap'), '6'), 10), mod(indexOf(variables('guidMap'), '7'), 10), '-', mod(indexOf(variables('guidMap'), '8'), 10), mod(indexOf(variables('guidMap'), '9'), 10), mod(indexOf(variables('guidMap'), 'a'), 10), mod(indexOf(variables('guidMap'), 'b'), 10), '-', mod(indexOf(variables('guidMap'), 'c'), 10), mod(indexOf(variables('guidMap'), 'd'), 10), mod(indexOf(variables('guidMap'), 'e'), 10), mod(indexOf(variables('guidMap'), 'f'), 10), '-', mod(indexOf(variables('guidMap'), 'g'), 10), mod(indexOf(variables('guidMap'), 'h'), 10), mod(indexOf(variables('guidMap'), 'i'), 10), mod(indexOf(variables('guidMap'), 'j'), 10), '-', mod(indexOf(variables('guidMap'), 'k'), 10), mod(indexOf(variables('guidMap'), 'l'), 10), mod(indexOf(variables('guidMap'), 'm'), 10), mod(indexOf(variables('guidMap'), 'n'), 10), mod(indexOf(variables('guidMap'), 'o'), 10), mod(indexOf(variables('guidMap'), 'p'), 10), mod(indexOf(variables('guidMap'), 'q'), 10), mod(indexOf(variables('guidMap'), 'r'), 10), mod(indexOf(variables('guidMap'), 's'), 10), mod(indexOf(variables('guidMap'), 't'), 10), mod(indexOf(variables('guidMap'), 'u'), 10), mod(indexOf(variables('guidMap'), 'v'), 10))]",
+        
+        "roleId": "[concat('21fba', variables('guidPart'))]",
+        "roleAssignment": "[concat('b6553', variables('guidPart'))]"
+    },
+    "resources": [
+        {
+            "apiVersion": "2015-06-15",
+			"type": "Microsoft.Storage/storageAccounts",
+			"name": "[variables('functionStorageName')]",
+			"location": "[resourceGroup().location]",
+			"properties": {
+				"accountType": "Standard_LRS"
+			}
+		},
+        {
+			"type": "Microsoft.Web/serverfarms",
+			"apiVersion": "2015-04-01",
+			"name": "[variables('functionName')]",
+			"location": "[resourceGroup().location]",
+			"properties": {
+				"name": "[variables('functionName')]",
+				"computeMode": "Dynamic",
+				"sku": "Dynamic"
+			}
+		},
+        {
+			"apiVersion": "2015-08-01",
+			"type": "Microsoft.Web/sites",
+			"name": "[variables('functionName')]",
+			"location": "[resourceGroup().location]",
+			"kind": "functionapp",
+            "dependsOn": [
+                "[concat('Microsoft.Web/serverfarms/', variables('functionName'))]"
+            ],
+			"properties": {
+				"serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('functionName'))]"
+			},
+            "identity": {
+                "type": "SystemAssigned"
+            },
+            "resources": [
+                {
+					"name": "MSDeploy",
+					"type": "extensions",
+					"location": "[resourceGroup().location]",
+					"apiVersion": "2015-08-01",
+					"dependsOn": [
+						"[variables('functionName')]",
+                        "[resourceId('Microsoft.Web/sites/config', variables('functionName'), 'appsettings')]"
+					],
+                    "condition": "[equals(empty(parameters('packageUri')), 'False')]",
+					"properties": {
+						"packageUri": "[parameters('packageUri')]"
+					}
+				},
+                {
+                    "type": "Microsoft.Web/sites/config",
+                    "apiVersion": "2015-08-01",
+                    "name": "[concat(variables('functionName'), '/appsettings')]",
+                    "dependsOn": [
+                        "[variables('functionName')]",
+                        "[concat('Microsoft.KeyVault/vaults/', variables('vaultName'))]"
+                    ],
+                    "properties": {
+                        "AzureWebJobsDashboard": "[concat(variables('functionStorageConnectionPrefix'), listKeys(variables('functionStorageId'), '2015-05-01-preview').key1)]",
+                        "AzureWebJobsStorage": "[concat(variables('functionStorageConnectionPrefix'), listKeys(variables('functionStorageId'), '2015-05-01-preview').key1)]",
+                        "WEBSITE_CONTENTAZUREFILECONNECTIONSTRING": "[concat(variables('functionStorageConnectionPrefix'), listKeys(variables('functionStorageId'), '2015-05-01-preview').key1)]",
+                        "WEBSITE_CONTENTSHARE": "[toLower(variables('functionName'))]",
+                        "FUNCTIONS_EXTENSION_VERSION": "~1",
+                        "ROUTING_EXTENSION_VERSION": "~0.2",
+                        "VaultUri": "[reference(variables('vaultId')).vaultUri]"
+                    }	
+                }
+            ]
+        },
+        {
+            "type": "Microsoft.KeyVault/vaults",
+            "name": "[variables('vaultName')]",
+            "apiVersion": "2016-10-01",
+            "location": "[resourceGroup().location]",
+            "properties": {
+                "sku": {
+                    "family": "A",
+                    "name": "Standard"
+                },
+                "tenantId": "[reference(variables('functionIdentityId'), '2015-08-31-PREVIEW').tenantId]",
+                "accessPolicies": [{
+                    "tenantId": "[reference(variables('functionIdentityId'), '2015-08-31-PREVIEW').tenantId]",
+                    "objectId": "[reference(variables('functionIdentityId'), '2015-08-31-PREVIEW').principalId]",
+                    "permissions": {
+                        "secrets": ["Get", "Set"]
+                    }
+                }]
+            }
+        },
+        {
+            "type": "Microsoft.Authorization/roleDefinitions",
+            "name": "[variables('roleId')]",
+            "apiVersion": "2015-07-01",
+            "location": "[resourceGroup().location]",
+            "properties": {
+                "roleName": "[concat('Container Group Owner - ', variables('roleId'))]",
+                "description": "Stuff and things",
+                "type": "CustomRole",
+                "permissions": [{
+                    "actions": [
+                        "Microsoft.ContainerInstance/*"
+                    ],
+                    "notActions": []
+                }],
+                "assignableScopes": [
+                    "[resourceGroup().id]"
+                ]
+            }
+        },
+        {
+            "type": "Microsoft.Authorization/roleAssignments",
+            "name": "[variables('roleAssignment')]",
+            "apiVersion": "2015-07-01",
+            "location": "[resourceGroup().location]",
+            "properties": {
+                "roleDefinitionId": "[concat(resourceGroup().id, '/providers/Microsoft.Authorization/roleDefinitions/', variables('roleId'))]",
+                "principalId": "[reference(variables('functionIdentityId'), '2015-08-31-PREVIEW').principalId]",
+                "scope": "[resourceGroup().id]"
+            },
+            "dependsOn": [
+                "[concat('Microsoft.Authorization/roleDefinitions/', variables('roleId'))]"
+            ]
+        }
+    ]
+}
